@@ -34,7 +34,7 @@ uv run urza-arena collect \
   --allow-memory-scan
 ~~~
 
-This explicitly opts into using the upstream utility to take a read-only memory snapshot with LLDB. It pauses Arena briefly. Wizards has not sanctioned memory scanning; it carries risk and should be used only if you accept that risk. The bridge validates the resulting CSV and saves it with owner-only permissions. The upstream exporter owns the lifecycle of any temporary memory dumps. Never upload a .core dump.
+This explicitly opts into using the upstream utility to take a read-only memory snapshot with LLDB. It pauses Arena briefly. Wizards has not sanctioned memory scanning; it carries risk and should be used only if you accept that risk. Urza keeps the snapshot in a private system temporary directory while the exporter runs. It removes that directory when the exporter finishes or reports an error. The bridge validates the resulting CSV and saves it with owner-only permissions. Never upload a .core dump.
 
 ### Use an existing collection CSV instead
 

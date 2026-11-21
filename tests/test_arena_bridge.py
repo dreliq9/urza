@@ -4,7 +4,11 @@ from __future__ import annotations
 import csv
 import io
 import json
+from email.message import Message
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import HTTPHandler, build_opener
+from urllib.response import addinfourl
 
 import pytest
 
@@ -60,8 +64,9 @@ def test_collection_rejects_empty_owned_cards(tmp_path: Path):
         a.read_collection(write_csv(tmp_path, text))
 
 
-def test_parse_arena_deck_and_ignore_sideboard():
-    deck = """Commander
+@pytest.mark.parametrize("header", ["", "About\nName Sarek Competitive Brawl\n\n"])
+def test_parse_arena_deck_and_ignore_sideboard(header: str):
+    deck = header + """Commander
 1 Sarek, Federation Ambassador (TRK) 251
 
 Deck
@@ -118,23 +123,52 @@ def test_memory_scan_rejects_nonmac(monkeypatch: pytest.MonkeyPatch):
         a.run_macos_export(exporter="mtga-collection-export", output_csv="/tmp/no.csv", confirm_memory_scan=True)
 
 
-def test_exporter_atomic_file_and_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize("export_fails", [False, True])
+def test_exporter_preserves_inputs_and_cleans_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, export_fails: bool,
+):
     binary = tmp_path / "mtga-collection-export"
     binary.write_text("#!/bin/sh\n", encoding="utf-8")
     binary.chmod(0o755)
     monkeypatch.setattr(a.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(a.shutil, "which", lambda name: str(binary))
-    calls = []
+    destination = tmp_path / "out" / "my.csv"
+    destination.parent.mkdir()
+    destination.write_text("previous collection", encoding="utf-8")
+    scratch_paths = []
 
     def fake_run(args, **kwargs):
-        calls.append(args)
+        scratch = Path(kwargs.get("env", {}).get("TMPDIR", tmp_path))
+        scratch_paths.append(scratch)
+        inputs = scratch / "exporter-inputs"
+        inputs.mkdir()
+        snapshot = inputs / "fixture.core"
+        snapshot.write_bytes(b"synthetic snapshot")
+        if "--keep-core" not in args:
+            snapshot.unlink()  # Current bynov releases remove inputs before processing.
+        assert snapshot.is_file(), "Exporter inputs were deleted before processing"
+        assert scratch.stat().st_mode & 0o077 == 0
+        assert args[args.index("--format") + 1] == "raw"
+        if export_fails:
+            raise a.subprocess.CalledProcessError(1, args, stderr="synthetic exporter failure")
         Path(args[args.index("--out") + 1]).write_text(RAW, encoding="utf-8")
 
     monkeypatch.setattr(a.subprocess, "run", fake_run)
-    cards, dst = a.run_macos_export(exporter=str(binary), output_csv=tmp_path / "out" / "my.csv", confirm_memory_scan=True)
-    assert len(cards) == 4 and dst.is_file()
-    assert calls[0][-2:] == ["--format", "raw"]
-    assert dst.stat().st_mode & 0o077 == 0
+    def export():
+        return a.run_macos_export(
+            exporter=str(binary), output_csv=destination, confirm_memory_scan=True,
+        )
+
+    if export_fails:
+        with pytest.raises(RuntimeError, match="synthetic exporter failure"):
+            export()
+        assert destination.read_text(encoding="utf-8") == "previous collection"
+    else:
+        cards, dst = export()
+        assert len(cards) == 4 and dst == destination
+        assert dst.read_text(encoding="utf-8") == RAW
+        assert dst.stat().st_mode & 0o077 == 0
+    assert len(scratch_paths) == 1 and not scratch_paths[0].exists()
 
 
 def test_ranked_tapps_only_and_private_data_excluded():
@@ -179,6 +213,27 @@ def test_tapps_request_loopback_and_schema(monkeypatch: pytest.MonkeyPatch):
     assert report["wins"] == 1
     with pytest.raises(ValueError, match="port"):
         a._read_local_tapps_games(0)
+
+
+@pytest.mark.parametrize("location", ["/another-path", "http://example.invalid/games"])
+def test_tapps_rejects_redirects(monkeypatch: pytest.MonkeyPatch, location: str):
+    requests = []
+
+    class FixtureTransport(HTTPHandler):
+        def http_open(self, request):
+            requests.append(request.full_url)
+            assert len(requests) == 1, "Tapps must not issue a second request"
+            headers = Message()
+            headers["Location"] = location
+            response = addinfourl(io.BytesIO(b""), headers, request.full_url, 302)
+            response.msg = "Found"
+            return response
+
+    monkeypatch.setattr(a, "build_opener", lambda *handlers: build_opener(*handlers, FixtureTransport()))
+    with pytest.raises(HTTPError) as error:
+        a.tapps_ranked_report()
+    assert error.value.code == 302
+    assert requests == ["http://127.0.0.1:8765/api/games"]
 
 
 def test_no_games_is_not_a_zero_percent_winrate():

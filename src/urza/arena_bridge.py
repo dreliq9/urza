@@ -18,7 +18,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 MAX_CSV_BYTES = 32 * 1024 * 1024
 MAX_GAMES_BYTES = 32 * 1024 * 1024
@@ -150,8 +150,11 @@ def parse_deck(deck_text: str) -> list[DeckCard]:
         line = raw.strip()
         if not line:
             continue
-        if line.casefold() in HEADINGS:
-            section = line.casefold()
+        normalized = line.casefold()
+        if normalized in HEADINGS:
+            section = normalized
+            continue
+        if section == "about" and normalized.startswith("name "):
             continue
         match = DECK_LINE.fullmatch(line)
         if match is None:
@@ -200,8 +203,7 @@ def run_macos_export(
 ) -> tuple[list[ArenaCard], Path]:
     """Run the user's installed bynov exporter only after explicit opt-in.
 
-    The exporter reads MTG Arena memory. The bridge never reads process memory
-    or retains an Arena memory dump, and never requests account credentials.
+    The exporter reads MTG Arena memory in an Urza-managed temporary directory.
     """
     if not confirm_memory_scan:
         raise PermissionError("Set confirm_memory_scan=True to authorize a read-only Arena memory scan")
@@ -215,10 +217,14 @@ def run_macos_export(
     with tempfile.TemporaryDirectory(prefix=".urza-arena-", dir=destination.parent) as tmp:
         staging = Path(tmp) / "arena-collection.csv"
         try:
-            subprocess.run(
-                [binary, "--out", str(staging), "--format", "raw"],
-                check=True, capture_output=True, text=True, timeout=timeout_seconds,
-            )
+            # bynov can delete its inputs before processing them. Keep them
+            # in a private directory that Urza cleans up after the subprocess.
+            with tempfile.TemporaryDirectory(prefix="urza-arena-export-") as scratch:
+                subprocess.run(
+                    [binary, "--out", str(staging), "--format", "raw", "--keep-core"],
+                    env={**os.environ, "TMPDIR": scratch},
+                    check=True, capture_output=True, text=True, timeout=timeout_seconds,
+                )
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(f"Collection exporter failed: {exc.stderr[-700:]}") from exc
         cards, fmt = read_collection(staging)
@@ -230,12 +236,17 @@ def run_macos_export(
     return cards, destination
 
 
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl) -> None:
+        return None
+
+
 def _read_local_tapps_games(port: int) -> list[dict[str, object]]:
     if not 1 <= port <= 65535:
         raise ValueError("port must be from 1 to 65535")
     url = f"http://127.0.0.1:{port}/api/games"
-    # Ignore environment proxies; never allow an arbitrary host or external URL.
-    opener = build_opener(ProxyHandler({}))
+    # Bypass environment proxies and restrict the request to this endpoint.
+    opener = build_opener(ProxyHandler({}), _RejectRedirects())
     with opener.open(Request(url, headers={"Accept": "application/json"}), timeout=5) as response:
         payload = response.read(MAX_GAMES_BYTES + 1)
     if len(payload) > MAX_GAMES_BYTES:
