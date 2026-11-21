@@ -28,6 +28,7 @@ dev = [
 
 [project.scripts]
 urza = "urza.server:main"
+urza-arena = "urza.arena_cli:main"
 
 [build-system]
 requires = ["hatchling"]
