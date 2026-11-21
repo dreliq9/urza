@@ -35,7 +35,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (Deskto
 }
 ```
 
-Restart the client. You should see 88 tools — 69 from j4th + 19 Urza-specific, all prefixed `urza_*`.
+Restart the client. You should see 92 tools — 69 from j4th + 19 Urza-specific, all prefixed `urza_*`.
 
 ## Urza tools
 
@@ -89,7 +89,7 @@ Claude client (Desktop / Code / any MCP client)
         │ stdio
         ▼
 ┌───────────────────────────────┐
-│ Urza (FastMCP, 88 tools)      │
+│ Urza (FastMCP, 92 tools)      │
 │                               │
 │  urza_collection_*            │
 │  urza_session_*               │
@@ -138,3 +138,18 @@ Urza itself provides the brewing workflow layer (collection, sessions, synergy d
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+
+## MTG Arena collection and Competitive Brawl bridge
+
+Urza now includes an **optional local Arena integration** that imports an owned-card collection (including the bynov raw CSV format), audits Arena decklists for missing cards, and reads **ranked Competitive Brawl** analytics from Tapps Tracker's local API.
+
+The memory scanner is **not bundled** or run automatically; it requires an explicit local opt-in. Tapps is queried only on 127.0.0.1, with no credentials or opponent identifiers returned. There is no automatic Google Drive sync or live connection from ChatGPT to your Mac.
+
+See [macOS installation, CLI, and MCP usage](docs/arena-bridge.md).
+
+~~~bash
+uv run urza-arena inspect --collection ~/Documents/Urza/Arena/collection.csv
+uv run urza-arena audit --collection ~/Documents/Urza/Arena/collection.csv --deck deck.txt
+uv run urza-arena tapps
+~~~
