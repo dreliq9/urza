@@ -25,7 +25,7 @@ def urza_version() -> str:
     return __version__
 
 
-from urza import brew, collection, sessions, synergy, synergy_graph  # noqa: E402,F401  — registers @mcp.tool decorators
+from urza import brew, collection, sessions, synergy, synergy_graph, arena  # noqa: E402,F401  — registers @mcp.tool decorators
 
 
 def main() -> None:
